@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"errors"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -87,14 +88,44 @@ func sanitizeName(name string) string {
 
 func randomCode(length int) (string, error) {
 	out := make([]byte, length)
-	raw := make([]byte, length)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
-	for i := range out {
-		out[i] = roomAlphabet[int(raw[i])%len(roomAlphabet)]
+	max := byte(255 - (256 % len(roomAlphabet)))
+	for index := range out {
+		for {
+			raw := []byte{0}
+			if _, err := rand.Read(raw); err != nil {
+				return "", err
+			}
+			if raw[0] > max {
+				continue
+			}
+			out[index] = roomAlphabet[int(raw[0])%len(roomAlphabet)]
+			break
+		}
 	}
 	return string(out), nil
+}
+
+func validateMessage(msg clientMessage) error {
+	for _, value := range []struct {
+		name  string
+		value string
+		limit int
+	}{
+		{"name", msg.Name, 128},
+		{"room", msg.Room, roomCodeLength},
+		{"contentId", msg.ContentID, 512},
+		{"contentType", msg.ContentType, 64},
+		{"videoId", msg.VideoID, 512},
+		{"title", msg.Title, 512},
+	} {
+		if len([]rune(value.value)) > value.limit {
+			return errors.New(value.name + " is too long")
+		}
+	}
+	if msg.PositionMs < 0 || msg.DurationMs < 0 {
+		return errors.New("playback positions cannot be negative")
+	}
+	return nil
 }
 
 var clientCounter uint64

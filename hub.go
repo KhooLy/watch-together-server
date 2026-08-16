@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"sort"
 	"sync"
@@ -250,17 +251,38 @@ func (h *hub) sendCurrentState(c *client, r *room) {
 	}
 }
 
-func (h *hub) cleanupLoop() {
+func (h *hub) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		expired := h.collectExpiredRooms(time.Now().Add(-h.roomTTL))
-		for _, clients := range expired {
-			for _, c := range clients {
-				_ = c.writeJSON(map[string]any{"type": msgError, "message": "room expired"})
-				_ = c.conn.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			expired := h.collectExpiredRooms(time.Now().Add(-h.roomTTL))
+			for _, clients := range expired {
+				for _, c := range clients {
+					_ = c.writeJSON(map[string]any{"type": msgError, "message": "room expired"})
+					_ = c.conn.Close()
+				}
 			}
 		}
+	}
+}
+
+func (h *hub) closeAll() {
+	h.mu.Lock()
+	clients := make([]*client, 0)
+	for _, r := range h.rooms {
+		for _, c := range r.clients {
+			c.room = nil
+			clients = append(clients, c)
+		}
+	}
+	h.rooms = make(map[string]*room)
+	h.mu.Unlock()
+	for _, c := range clients {
+		_ = c.conn.Close()
 	}
 }
 
