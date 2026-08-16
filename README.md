@@ -98,6 +98,28 @@ Clients remain responsible for media playback, authorization UI, content resolut
 
 Use TLS for Internet deployments, configure `WATCH_TOGETHER_SECRET`, and set `WATCH_TOGETHER_ALLOWED_ORIGINS` to the exact client origins you trust. The server rejects browser origins that are not listed, limits concurrent connections, limits message rates, caps WebSocket frames, and expires inactive rooms. The server is intentionally stateless beyond active in-memory rooms; restarting it removes all rooms. For multiple instances, use sticky routing or add a shared room store and broker.
 
+## Supabase mode
+
+The desktop client can run watch together either against this server (`mode: 'websocket'`) or directly against Supabase Realtime (`mode: 'supabase'`). In Supabase mode this server is not used at all and there is nothing to deploy: Realtime carries the broadcasts and presence, and the room registry, capacity, and quota rules live in Postgres.
+
+Apply `supabase/migrations/` to the project, then point the client at the project URL and anon key. The migration creates:
+
+- `watch_rooms` and `watch_room_members`, readable only by members through RLS, writable only through the functions below
+- `create_watch_room()`, which allocates a collision-checked six-character code from the same ambiguity-free alphabet this server uses, caps a user at five rooms per hour and one active room, and purges expired rooms
+- `join_watch_room()`, which enforces `max_members` under a row lock, and `leave_watch_room()`, which promotes the earliest remaining member to host or drops the room
+- RLS policies on `realtime.messages` so only current members of a live room can send to or receive from `watch-together:<code>`
+
+Rooms expire six hours after creation. `create_watch_room()` purges expired rows opportunistically; schedule `watch_room_purge()` with pg_cron if you want rooms collected without traffic.
+
+Two things the client must do for any of this to apply:
+
+1. Subscribe with `{ config: { private: true } }`. Realtime only consults the `realtime.messages` policies for private channels; a public channel bypasses them entirely.
+2. Call `supabase.realtime.setAuth(accessToken)` with the signed-in user's token before subscribing, and create or join rooms through the RPCs rather than generating a code locally.
+
+Known limit: RLS gates *who may send in a room*, not *what they send*. Host authority stays advisory — clients should ignore `state` and `content` messages whose sender is not the `host_id` they read from `watch_rooms`. Enforcing that server-side would require routing playback state through a function instead of broadcast, which costs the latency Realtime is being used for.
+
+These policies are written as the only policies on `realtime.messages`. Policies are permissive and OR together, so other Realtime features need their own; adding this one does not grant them access, but if it is the only policy present then every other topic is denied.
+
 ## License
 
 MIT. See `LICENSE`.
