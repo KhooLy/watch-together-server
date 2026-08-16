@@ -27,7 +27,7 @@ func loadConfig() (serverConfig, error) {
 		secret:                   strings.TrimSpace(os.Getenv("WATCH_TOGETHER_SECRET")),
 		allowAnonymous:           envBool("ALLOW_ANONYMOUS", false),
 		trustProxyHeaders:        envBool("TRUST_PROXY_HEADERS", false),
-		allowedOrigins:            envList("WATCH_TOGETHER_ALLOWED_ORIGINS"),
+		allowedOrigins:           envList("WATCH_TOGETHER_ALLOWED_ORIGINS"),
 		maxMembers:               envInt("MAX_ROOM_MEMBERS", 12),
 		roomTTLMinutes:           envInt("ROOM_TTL_MINUTES", 360),
 		maxConnections:           envInt("MAX_CONNECTIONS", 1000),
@@ -53,8 +53,12 @@ func envString(name string, fallback string) string {
 }
 
 func envInt(name string, fallback int) int {
-	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
-	if err != nil || value <= 0 {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
 		return fallback
 	}
 	return value

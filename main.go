@@ -69,14 +69,15 @@ func main() {
 		if err != nil {
 			return
 		}
-		c := &client{id: newClientID(), name: "Guest", conn: conn}
-		defer func() { h.leave(c); _ = conn.Close() }()
+		c := newClient(conn)
+		go c.writePump()
+		defer func() { h.leave(c); c.close() }()
 		messageLimiter := newTokenBucket(config.messagesPerSecond, config.messageBurst)
 		violations := 0
 
 		conn.SetReadLimit(64 * 1024)
-		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-		conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(90 * time.Second)) })
+		_ = conn.SetReadDeadline(time.Now().Add(readWait))
+		conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(readWait)) })
 
 		for {
 			var msg clientMessage
@@ -95,11 +96,10 @@ func main() {
 				_ = c.writeJSON(map[string]any{"type": msgError, "message": err.Error()})
 				continue
 			}
-			_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+			_ = conn.SetReadDeadline(time.Now().Add(readWait))
 			switch strings.ToLower(strings.TrimSpace(msg.Type)) {
 			case msgCreate:
-				c.name = sanitizeName(msg.Name)
-				r, err := h.createRoom(c)
+				r, err := h.createRoom(c, sanitizeName(msg.Name))
 				if err != nil {
 					_ = c.writeJSON(map[string]any{"type": msgError, "message": err.Error()})
 					continue
@@ -107,8 +107,7 @@ func main() {
 				_ = c.writeJSON(h.roomPayload(c, r))
 				h.broadcastMembers(r)
 			case msgJoin:
-				c.name = sanitizeName(msg.Name)
-				r, err := h.joinRoom(c, msg.Room)
+				r, err := h.joinRoom(c, msg.Room, sanitizeName(msg.Name))
 				if err != nil {
 					_ = c.writeJSON(map[string]any{"type": msgError, "message": err.Error()})
 					continue

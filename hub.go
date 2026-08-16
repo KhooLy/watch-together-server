@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"sync"
@@ -9,6 +10,15 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+const (
+	writeWait    = 10 * time.Second
+	readWait     = 90 * time.Second
+	pingInterval = 30 * time.Second
+	sendBuffer   = 64
+)
+
+var errClientGone = errors.New("client is closed")
 
 type room struct {
 	code      string
@@ -24,8 +34,14 @@ type client struct {
 	name      string
 	buffering bool
 	conn      *websocket.Conn
-	writeMu   sync.Mutex
+	send      chan []byte
+	sendMu    sync.Mutex
+	closed    bool
 	room      *room
+}
+
+func newClient(conn *websocket.Conn) *client {
+	return &client{id: newClientID(), name: "Guest", conn: conn, send: make(chan []byte, sendBuffer)}
 }
 
 type hub struct {
@@ -39,11 +55,11 @@ func newHub(maxRoomMembers int, roomTTL time.Duration) *hub {
 	return &hub{rooms: make(map[string]*room), maxRoomMembers: maxRoomMembers, roomTTL: roomTTL}
 }
 
-// roomChange describes a previous room that needs notifications after the hub lock is released.
 type roomChange struct{ room *room }
 
-func (h *hub) createRoom(c *client) (*room, error) {
+func (h *hub) createRoom(c *client, name string) (*room, error) {
 	h.mu.Lock()
+	c.name = name
 	previous := h.leaveLocked(c)
 	code, err := h.uniqueCodeLocked()
 	if err != nil {
@@ -59,7 +75,7 @@ func (h *hub) createRoom(c *client) (*room, error) {
 	return r, nil
 }
 
-func (h *hub) joinRoom(c *client, code string) (*room, error) {
+func (h *hub) joinRoom(c *client, code string, name string) (*room, error) {
 	code = normalizeRoomCode(code)
 	if !validRoomCode(code) {
 		return nil, errors.New("invalid room code")
@@ -70,6 +86,12 @@ func (h *hub) joinRoom(c *client, code string) (*room, error) {
 	if r == nil {
 		h.mu.Unlock()
 		return nil, errors.New("room not found")
+	}
+	c.name = name
+	if c.room == r {
+		r.updatedAt = time.Now()
+		h.mu.Unlock()
+		return r, nil
 	}
 	if len(r.clients) >= h.maxRoomMembers {
 		h.mu.Unlock()
@@ -263,7 +285,7 @@ func (h *hub) cleanupLoop(ctx context.Context) {
 			for _, clients := range expired {
 				for _, c := range clients {
 					_ = c.writeJSON(map[string]any{"type": msgError, "message": "room expired"})
-					_ = c.conn.Close()
+					c.close()
 				}
 			}
 		}
@@ -282,12 +304,10 @@ func (h *hub) closeAll() {
 	h.rooms = make(map[string]*room)
 	h.mu.Unlock()
 	for _, c := range clients {
-		_ = c.conn.Close()
+		c.close()
 	}
 }
 
-// collectExpiredRooms mutates room membership under lock, but deliberately returns sockets for
-// notification/close afterwards. Slow network I/O must never hold the global hub mutex.
 func (h *hub) collectExpiredRooms(cutoff time.Time) [][]*client {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -343,14 +363,74 @@ func copyClients(r *room) []*client {
 }
 
 func broadcast(clients []*client, payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
 	for _, c := range clients {
-		_ = c.writeJSON(payload)
+		_ = c.enqueue(data)
 	}
 }
 
 func (c *client) writeJSON(value any) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	return c.conn.WriteJSON(value)
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return c.enqueue(data)
+}
+
+func (c *client) enqueue(data []byte) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	if c.closed {
+		return errClientGone
+	}
+	select {
+	case c.send <- data:
+		return nil
+	default:
+		c.closeLocked()
+		return errors.New("send buffer full")
+	}
+}
+
+func (c *client) close() {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	c.closeLocked()
+}
+
+func (c *client) closeLocked() {
+	if c.closed {
+		return
+	}
+	c.closed = true
+	close(c.send)
+}
+
+func (c *client) writePump() {
+	ticker := time.NewTicker(pingInterval)
+	defer func() {
+		ticker.Stop()
+		_ = c.conn.Close()
+	}()
+	for {
+		select {
+		case data, ok := <-c.send:
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				_ = c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+				return
+			}
+			if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				return
+			}
+		case <-ticker.C:
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		}
+	}
 }

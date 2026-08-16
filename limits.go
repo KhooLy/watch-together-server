@@ -9,11 +9,11 @@ import (
 )
 
 type connectionLimiter struct {
-	mu             sync.Mutex
-	total          int
-	byAddress      map[string]int
-	maxTotal       int
-	maxPerAddress  int
+	mu            sync.Mutex
+	total         int
+	byAddress     map[string]int
+	maxTotal      int
+	maxPerAddress int
 }
 
 func newConnectionLimiter(maxTotal int, maxPerAddress int) *connectionLimiter {

@@ -39,6 +39,28 @@ func TestHostMigrationIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestRejoiningOwnRoomKeepsItRegistered(t *testing.T) {
+	h := newHub(1, time.Hour)
+	c := &client{id: "c", name: "Old", send: make(chan []byte, sendBuffer)}
+	r := &room{code: "ABC234", hostID: c.id, clients: map[string]*client{c.id: c}, updatedAt: time.Now()}
+	c.room = r
+	h.rooms[r.code] = r
+
+	got, err := h.joinRoom(c, "abc234", "New")
+	if err != nil {
+		t.Fatalf("rejoining own room failed: %v", err)
+	}
+	if got != r || h.rooms["ABC234"] != r {
+		t.Fatal("rejoining own room unregistered it from the hub")
+	}
+	if len(r.clients) != 1 {
+		t.Fatalf("expected membership to be unchanged, got %d", len(r.clients))
+	}
+	if c.name != "New" {
+		t.Fatalf("expected name update, got %q", c.name)
+	}
+}
+
 func TestExpiredRoomsAreDetachedUnderLockAndReturnedForIO(t *testing.T) {
 	h := newHub(12, time.Minute)
 	c := &client{id: "c"}

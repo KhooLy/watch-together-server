@@ -90,6 +90,8 @@ Server messages:
 - `pong`: server clock response
 - `error`: request or room failure
 
+The server sends WebSocket ping frames every 30 seconds and drops connections that go 90 seconds without traffic. Browsers answer ping frames automatically; native clients must reply with a pong. A client that cannot keep up with broadcasts is disconnected rather than allowed to delay the rest of its room.
+
 Clients remain responsible for media playback, authorization UI, content resolution, drift correction, and reconnect behavior.
 
 ## Security
