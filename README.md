@@ -111,6 +111,8 @@ Apply `supabase/migrations/` to the project, then point the client at the projec
 
 Rooms expire six hours after creation. `create_watch_room()` purges expired rows opportunistically; schedule `watch_room_purge()` with pg_cron if you want rooms collected without traffic.
 
+Realtime bills a broadcast as one message sent plus one per subscriber that receives it, so a four-person room costs four messages per host update. At the client's ten-second cadence that is 1,440 messages an hour per room, or roughly 1,400 room-hours against the free plan's two million monthly messages. The per-second cadence the client used previously would have cost ten times that and exhausted the month in about 140 room-hours. Presence joins and leaves are billed the same way, so churn matters more than room size.
+
 Two things the client must do for any of this to apply:
 
 1. Subscribe with `{ config: { private: true } }`. Realtime only consults the `realtime.messages` policies for private channels; a public channel bypasses them entirely.
