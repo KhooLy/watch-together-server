@@ -1,9 +1,24 @@
 create extension if not exists pgcrypto;
 
+create table if not exists public.watch_settings (
+  id boolean primary key default true check (id),
+  max_members smallint not null default 6 check (max_members between 2 and 32),
+  room_ttl interval not null default interval '6 hours',
+  rooms_per_hour smallint not null default 5 check (rooms_per_hour > 0)
+);
+
+insert into public.watch_settings (id) values (true) on conflict (id) do nothing;
+
+alter table public.watch_settings enable row level security;
+
+create policy "settings are readable"
+  on public.watch_settings for select to authenticated
+  using (true);
+
 create table if not exists public.watch_rooms (
   code text primary key,
   host_id uuid not null references auth.users (id) on delete cascade,
-  max_members smallint not null default 6 check (max_members between 2 and 8),
+  max_members smallint not null default 6 check (max_members between 2 and 32),
   created_at timestamptz not null default now(),
   expires_at timestamptz not null default now() + interval '6 hours'
 );
@@ -77,6 +92,7 @@ set search_path = public
 as $$
 declare
   actor uuid := auth.uid();
+  limits public.watch_settings;
   candidate text;
   room public.watch_rooms;
 begin
@@ -86,10 +102,12 @@ begin
 
   perform public.watch_room_purge();
 
+  select * into limits from public.watch_settings where id;
+
   if (
     select count(*) from public.watch_rooms
     where host_id = actor and created_at > now() - interval '1 hour'
-  ) >= 5 then
+  ) >= limits.rooms_per_hour then
     raise exception 'room creation limit reached, try again later' using errcode = '53400';
   end if;
 
@@ -99,8 +117,8 @@ begin
   for attempt in 1..32 loop
     candidate := public.watch_room_code();
     begin
-      insert into public.watch_rooms (code, host_id)
-      values (candidate, actor)
+      insert into public.watch_rooms (code, host_id, max_members, expires_at)
+      values (candidate, actor, limits.max_members, now() + limits.room_ttl)
       returning * into room;
       exit;
     exception when unique_violation then

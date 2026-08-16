@@ -109,7 +109,9 @@ Apply `supabase/migrations/` to the project, then point the client at the projec
 - `join_watch_room()`, which enforces `max_members` under a row lock, and `leave_watch_room()`, which promotes the earliest remaining member to host or drops the room
 - RLS policies on `realtime.messages` so only current members of a live room can send to or receive from `watch-together:<code>`
 
-Rooms expire six hours after creation. `create_watch_room()` purges expired rows opportunistically; schedule `watch_room_purge()` with pg_cron if you want rooms collected without traffic.
+Instance limits live in `watch_settings`, a single row holding `max_members`, `room_ttl`, and `rooms_per_hour` — the Supabase-mode counterpart to this server's `MAX_ROOM_MEMBERS`, `ROOM_TTL_MINUTES`, and rate-limit variables. It is readable by signed-in users and writable only through the SQL editor or the service role, so a self-hosted instance can raise the defaults without the client being able to. One active room per user is not a tunable: the client protocol assumes a single room per connection.
+
+Rooms expire after `room_ttl`, six hours by default. `create_watch_room()` purges expired rows opportunistically; schedule `watch_room_purge()` with pg_cron if you want rooms collected without traffic.
 
 Realtime bills a broadcast as one message sent plus one per subscriber that receives it, so a four-person room costs four messages per host update. At the client's ten-second cadence that is 1,440 messages an hour per room, or roughly 1,400 room-hours against the free plan's two million monthly messages. The per-second cadence the client used previously would have cost ten times that and exhausted the month in about 140 room-hours. Presence joins and leaves are billed the same way, so churn matters more than room size.
 
