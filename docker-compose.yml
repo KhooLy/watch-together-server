@@ -1,0 +1,11 @@
+services:
+  watch-together:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: "8787"
+      WATCH_TOGETHER_SECRET: ""
+      MAX_ROOM_MEMBERS: "12"
+      ROOM_TTL_MINUTES: "360"
