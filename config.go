@@ -28,12 +28,12 @@ func loadConfig() (serverConfig, error) {
 		allowAnonymous:           envBool("ALLOW_ANONYMOUS", false),
 		trustProxyHeaders:        envBool("TRUST_PROXY_HEADERS", false),
 		allowedOrigins:           envList("WATCH_TOGETHER_ALLOWED_ORIGINS"),
-		maxMembers:               envInt("MAX_ROOM_MEMBERS", 12),
-		roomTTLMinutes:           envInt("ROOM_TTL_MINUTES", 360),
-		maxConnections:           envInt("MAX_CONNECTIONS", 1000),
-		maxConnectionsPerAddress: envInt("MAX_CONNECTIONS_PER_ADDRESS", 20),
-		messagesPerSecond:        envInt("MESSAGES_PER_SECOND", 30),
-		messageBurst:             envInt("MESSAGE_BURST", 60),
+		maxMembers:               envPositiveInt("MAX_ROOM_MEMBERS", 12),
+		roomTTLMinutes:           envPositiveInt("ROOM_TTL_MINUTES", 360),
+		maxConnections:           envPositiveInt("MAX_CONNECTIONS", 1000),
+		maxConnectionsPerAddress: envPositiveInt("MAX_CONNECTIONS_PER_ADDRESS", 20),
+		messagesPerSecond:        envPositiveInt("MESSAGES_PER_SECOND", 30),
+		messageBurst:             envPositiveInt("MESSAGE_BURST", 60),
 	}
 	if config.secret == "" && !config.allowAnonymous {
 		return serverConfig{}, errors.New("WATCH_TOGETHER_SECRET must be set unless ALLOW_ANONYMOUS=true")
@@ -62,6 +62,13 @@ func envInt(name string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func envPositiveInt(name string, fallback int) int {
+	if value := envInt(name, fallback); value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func envBool(name string, fallback bool) bool {

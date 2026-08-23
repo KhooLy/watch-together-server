@@ -58,6 +58,42 @@ type playbackState struct {
 	Title       string
 }
 
+// Concrete payloads keep every server path aligned with the Rust client wire contract.
+type contentPayload struct {
+	Type        string `json:"type"`
+	ContentID   string `json:"contentId"`
+	ContentType string `json:"contentType"`
+	VideoID     string `json:"videoId,omitempty"`
+	Title       string `json:"title"`
+}
+
+type syncPayload struct {
+	Type         string `json:"type"`
+	Sequence     int64  `json:"sequence"`
+	SenderID     string `json:"senderId"`
+	ServerTimeMs int64  `json:"serverTimeMs"`
+	PositionMs   int64  `json:"positionMs"`
+	DurationMs   int64  `json:"durationMs"`
+	Playing      bool   `json:"playing"`
+	Buffering    bool   `json:"buffering"`
+	ContentID    string `json:"contentId"`
+	ContentType  string `json:"contentType"`
+	VideoID      string `json:"videoId,omitempty"`
+	Title        string `json:"title"`
+}
+
+func newContentPayload(contentType, contentID, videoID, title string) contentPayload {
+	return contentPayload{Type: msgContent, ContentID: contentID, ContentType: contentType, VideoID: videoID, Title: title}
+}
+
+func newSyncPayload(state playbackState, sequence int64, senderID string, nowMs int64) syncPayload {
+	return syncPayload{
+		Type: msgSync, Sequence: sequence, SenderID: senderID, ServerTimeMs: nowMs,
+		PositionMs: state.PositionMs, DurationMs: state.DurationMs, Playing: state.Playing, Buffering: state.Buffering,
+		ContentID: state.ContentID, ContentType: state.ContentType, VideoID: state.VideoID, Title: state.Title,
+	}
+}
+
 func normalizeRoomCode(value string) string {
 	return strings.ToUpper(strings.TrimSpace(value))
 }
@@ -87,22 +123,36 @@ func sanitizeName(name string) string {
 }
 
 func randomCode(length int) (string, error) {
-	out := make([]byte, length)
-	max := byte(255 - (256 % len(roomAlphabet)))
-	for index := range out {
-		for {
-			raw := []byte{0}
-			if _, err := rand.Read(raw); err != nil {
-				return "", err
-			}
-			if raw[0] > max {
+	limit := byte(255 - (256 % len(roomAlphabet)))
+	out := make([]byte, 0, length)
+	buffer := make([]byte, length*2)
+	for len(out) < length {
+		if _, err := rand.Read(buffer); err != nil {
+			return "", err
+		}
+		for _, raw := range buffer {
+			if raw > limit {
 				continue
 			}
-			out[index] = roomAlphabet[int(raw[0])%len(roomAlphabet)]
-			break
+			out = append(out, roomAlphabet[int(raw)%len(roomAlphabet)])
+			if len(out) == length {
+				break
+			}
 		}
 	}
 	return string(out), nil
+}
+
+func roomCodeCandidates(count int) ([]string, error) {
+	codes := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		code, err := randomCode(roomCodeLength)
+		if err != nil {
+			return nil, err
+		}
+		codes = append(codes, code)
+	}
+	return codes, nil
 }
 
 func validateMessage(msg clientMessage) error {

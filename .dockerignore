@@ -1,0 +1,8 @@
+.git
+.github
+.claude
+.env
+supabase
+README.md
+LICENSE
+*_test.go

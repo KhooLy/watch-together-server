@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"log"
 	"net/http"
 	"os"
@@ -55,7 +56,7 @@ func main() {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		if config.secret != "" && r.URL.Query().Get("token") != config.secret {
+		if config.secret != "" && subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(config.secret)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -75,7 +76,7 @@ func main() {
 		messageLimiter := newTokenBucket(config.messagesPerSecond, config.messageBurst)
 		violations := 0
 
-		conn.SetReadLimit(64 * 1024)
+		conn.SetReadLimit(maxMessageBytes)
 		_ = conn.SetReadDeadline(time.Now().Add(readWait))
 		conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(readWait)) })
 

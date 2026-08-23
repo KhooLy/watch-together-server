@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	writeWait    = 10 * time.Second
-	readWait     = 90 * time.Second
-	pingInterval = 30 * time.Second
-	sendBuffer   = 64
+	writeWait       = 10 * time.Second
+	readWait        = 90 * time.Second
+	pingInterval    = 30 * time.Second
+	sendBuffer      = 64
+	maxMessageBytes = 8 * 1024
 )
 
 var errClientGone = errors.New("client is closed")
@@ -58,14 +59,25 @@ func newHub(maxRoomMembers int, roomTTL time.Duration) *hub {
 type roomChange struct{ room *room }
 
 func (h *hub) createRoom(c *client, name string) (*room, error) {
+	candidates, err := roomCodeCandidates(32)
+	if err != nil {
+		return nil, err
+	}
+
 	h.mu.Lock()
 	c.name = name
 	previous := h.leaveLocked(c)
-	code, err := h.uniqueCodeLocked()
-	if err != nil {
+	code := ""
+	for _, candidate := range candidates {
+		if h.rooms[candidate] == nil {
+			code = candidate
+			break
+		}
+	}
+	if code == "" {
 		h.mu.Unlock()
 		h.notifyRoomChange(previous)
-		return nil, err
+		return nil, errors.New("could not allocate room code")
 	}
 	r := &room{code: code, hostID: c.id, clients: map[string]*client{c.id: c}, updatedAt: time.Now()}
 	c.room = r
@@ -156,21 +168,14 @@ func (h *hub) handleState(c *client, msg clientMessage) {
 		PositionMs: msg.PositionMs, DurationMs: msg.DurationMs, Playing: msg.Playing, Buffering: msg.Buffering,
 		ContentID: msg.ContentID, ContentType: msg.ContentType, VideoID: msg.VideoID, Title: msg.Title,
 	}
+	state := r.state
 	r.sequence++
 	sequence := r.sequence
 	r.updatedAt = time.Now()
 	clients := copyClients(r)
 	h.mu.Unlock()
 
-	payload := map[string]any{
-		"type": msgSync, "sequence": sequence, "senderId": c.id, "serverTimeMs": time.Now().UnixMilli(),
-		"positionMs": msg.PositionMs, "durationMs": msg.DurationMs, "playing": msg.Playing, "buffering": msg.Buffering,
-		"contentId": msg.ContentID, "contentType": msg.ContentType, "title": msg.Title,
-	}
-	if msg.VideoID != "" {
-		payload["videoId"] = msg.VideoID
-	}
-	broadcast(clients, payload)
+	broadcast(clients, newSyncPayload(state, sequence, c.id, time.Now().UnixMilli()))
 }
 
 func (h *hub) handleContent(c *client, msg clientMessage) {
@@ -185,17 +190,13 @@ func (h *hub) handleContent(c *client, msg clientMessage) {
 	clients := copyClients(r)
 	h.mu.Unlock()
 
-	payload := map[string]any{"type": msgContent, "contentId": msg.ContentID, "contentType": msg.ContentType, "title": msg.Title}
-	if msg.VideoID != "" {
-		payload["videoId"] = msg.VideoID
-	}
-	broadcast(clients, payload)
+	broadcast(clients, newContentPayload(msg.ContentType, msg.ContentID, msg.VideoID, msg.Title))
 }
 
 func (h *hub) handleBuffering(c *client, buffering bool) {
 	h.mu.Lock()
 	r := c.room
-	if r == nil {
+	if r == nil || c.buffering == buffering {
 		h.mu.Unlock()
 		return
 	}
@@ -254,22 +255,10 @@ func (h *hub) sendCurrentState(c *client, r *room) {
 	h.mu.RUnlock()
 
 	if state.ContentID != "" {
-		payload := map[string]any{"type": msgContent, "contentId": state.ContentID, "contentType": state.ContentType, "title": state.Title}
-		if state.VideoID != "" {
-			payload["videoId"] = state.VideoID
-		}
-		_ = c.writeJSON(payload)
+		_ = c.writeJSON(newContentPayload(state.ContentType, state.ContentID, state.VideoID, state.Title))
 	}
 	if state.DurationMs > 0 || state.PositionMs > 0 || state.Playing {
-		payload := map[string]any{
-			"type": msgSync, "sequence": sequence, "senderId": "server", "serverTimeMs": time.Now().UnixMilli(),
-			"positionMs": state.PositionMs, "durationMs": state.DurationMs, "playing": state.Playing, "buffering": state.Buffering,
-			"contentId": state.ContentID, "contentType": state.ContentType, "title": state.Title,
-		}
-		if state.VideoID != "" {
-			payload["videoId"] = state.VideoID
-		}
-		_ = c.writeJSON(payload)
+		_ = c.writeJSON(newSyncPayload(state, sequence, "server", time.Now().UnixMilli()))
 	}
 }
 
@@ -325,19 +314,6 @@ func (h *hub) collectExpiredRooms(cutoff time.Time) [][]*client {
 		expired = append(expired, clients)
 	}
 	return expired
-}
-
-func (h *hub) uniqueCodeLocked() (string, error) {
-	for i := 0; i < 32; i++ {
-		code, err := randomCode(roomCodeLength)
-		if err != nil {
-			return "", err
-		}
-		if h.rooms[code] == nil {
-			return code, nil
-		}
-	}
-	return "", errors.New("could not allocate room code")
 }
 
 func memberViews(r *room) []memberView {
