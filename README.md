@@ -105,8 +105,8 @@ The desktop client can run watch together either against this server (`mode: 'we
 Apply `supabase/migrations/` to the project, then point the client at the project URL and anon key. The migration creates:
 
 - `watch_rooms` and `watch_room_members`, readable only by members through RLS, writable only through the functions below
-- `create_watch_room()`, which allocates a collision-checked six-character code from the same ambiguity-free alphabet this server uses, caps a user at five rooms per hour and one active room, and purges expired rooms
-- `join_watch_room()`, which enforces `max_members` under a row lock, and `leave_watch_room()`, which promotes the earliest remaining member to host or drops the room
+- `create_watch_room()`, which allocates a collision-checked six-character code from the same ambiguity-free alphabet this server uses, caps a user at five rooms per hour and one active room, and purges expired rooms. The hourly cap is counted from `watch_room_creations`, an append-only log, because the room rows themselves are removed when the user moves to another room
+- `join_watch_room()`, which enforces `max_members` under a row lock, and `leave_watch_room()`, which promotes the earliest remaining member to host or drops the room. Creating or joining a room releases the user's previous one through the same succession path, so hosting a room and then joining another hands the old room to its next member instead of destroying it
 - RLS policies on `realtime.messages` so only current members of a live room can send to or receive from `watch-together:<code>`
 
 Instance limits live in `watch_settings`, a single row holding `max_members`, `room_ttl`, and `rooms_per_hour` — the Supabase-mode counterpart to this server's `MAX_ROOM_MEMBERS`, `ROOM_TTL_MINUTES`, and rate-limit variables. It is readable by signed-in users and writable only through the SQL editor or the service role, so a self-hosted instance can raise the defaults without the client being able to. One active room per user is not a tunable: the client protocol assumes a single room per connection.
