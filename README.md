@@ -115,6 +115,10 @@ Rooms expire after `room_ttl`, six hours by default. `create_watch_room()` purge
 
 Realtime bills a broadcast as one message sent plus one per subscriber that receives it, so a four-person room costs four messages per host update. At the client's ten-second cadence that is 1,440 messages an hour per room, or roughly 1,400 room-hours against the free plan's two million monthly messages. The per-second cadence the client used previously would have cost ten times that and exhausted the month in about 140 room-hours. Presence joins and leaves are billed the same way, so churn matters more than room size.
 
+`create_watch_room(display_name, profile_id, avatar)` and `join_watch_room(code, display_name, profile_id, avatar)` store a name, avatar, and color on the member row so every client can show who is in the room. The generic migration accepts a client-supplied `https` avatar URL of at most 2048 characters without credentials; deployments with their own profile table replace `watch_room_identity()` to read the name and avatar from it instead, as `fluxa-sync` does. Members of a room are readable only by that room's members, through `is_watch_room_member()`, a security definer helper so the policies do not recurse into the table they protect.
+
+Anonymous sign-ins work as room identities. `watch_cleanup_anonymous_users()` removes anonymous accounts older than seven days that are not in a room, and is scheduled daily when pg_cron is installed.
+
 Two things the client must do for any of this to apply:
 
 1. Subscribe with `{ config: { private: true } }`. Realtime only consults the `realtime.messages` policies for private channels; a public channel bypasses them entirely.
