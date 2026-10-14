@@ -45,12 +45,13 @@ set search_path = public
 as $$
 declare
   actor uuid := auth.uid();
+  target text := upper(btrim(code));
 begin
   if actor is null then
     raise exception 'authentication required' using errcode = '42501';
   end if;
   update public.watch_rooms r set locked = lock
-    where r.code = upper(btrim(code)) and r.host_id = actor and r.expires_at > now();
+    where r.code = target and r.host_id = actor and r.expires_at > now();
   if not found then
     raise exception 'only the host can lock the room' using errcode = '42501';
   end if;
